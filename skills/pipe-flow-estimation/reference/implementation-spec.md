@@ -4,7 +4,7 @@
 
 ## 步骤 1 — 提取（extract.py）
 
-读取用户指定的 DXF 图，找出用户指定的管线图层（如 `YSLINE`）中的管段（LINE / 多段线），并提取两类辅助元素——`LX` 箭头块（确定流向）、`CSK` 出水口块（确定出水口）——将三者转化为 JSON：管段端点聚类为 `nodes`（single-linkage，`snap_tolerance`；簇均值定坐标，按 (x,y) 排序定 ID），管段连同方向写入 `edges`。JSON 六层契约见 [json-schema.md](json-schema.md)。
+读取用户指定的 DXF 图，找出用户指定的管线图层（如 `YSLINE`）中的管段（LINE / LWPOLYLINE / POLYLINE——R12 图的 2D POLYLINE 与 LWPOLYLINE 同规则读取：顶点有序点列、忽略闭合标志与 z/bulge；漏读 POLYLINE 会静默丢管、断网成假多树），并提取两类辅助元素——`LX` 箭头块（确定流向）、`CSK` 出水口块（确定出水口）——将三者转化为 JSON：管段端点聚类为 `nodes`（single-linkage，`snap_tolerance`；簇均值定坐标，按 (x,y) 排序定 ID），管段连同方向写入 `edges`。JSON 六层契约见 [json-schema.md](json-schema.md)。
 
 ### 方向判定
 

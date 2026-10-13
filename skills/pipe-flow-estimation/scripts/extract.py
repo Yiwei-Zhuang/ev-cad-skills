@@ -37,7 +37,7 @@ def main():
     doc = ezdxf.readfile(args.src)
     msp = doc.modelspace()
 
-    # ---- 管段收集 (LINE / LWPOLYLINE) ----
+    # ---- 管段收集 (LINE / LWPOLYLINE / POLYLINE) ----
     raw_edges = []          # (geometry[V], length)
     for e in msp:
         if e.dxf.layer != LAYER:
@@ -49,6 +49,16 @@ def main():
             raw_edges.append(([a, b], a.distance(b)))
         elif e.dxftype() == "LWPOLYLINE":
             pts = [V(x, y) for x, y in e.get_points("xy")]
+            if len(pts) < 2:
+                continue
+            L = sum(pts[i].distance(pts[i + 1]) for i in range(len(pts) - 1))
+            if L < EPS:
+                continue
+            raw_edges.append((pts, L))
+        elif e.dxftype() == "POLYLINE":     # R12 2D 多段线(视同开多段线, 与 LWPOLYLINE 同规则, 忽略 z/bulge)
+            if e.is_poly_face_mesh or e.is_polygon_mesh:
+                continue
+            pts = [V(v.dxf.location.x, v.dxf.location.y) for v in e.vertices]
             if len(pts) < 2:
                 continue
             L = sum(pts[i].distance(pts[i + 1]) for i in range(len(pts) - 1))
