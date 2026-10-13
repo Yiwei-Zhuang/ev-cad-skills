@@ -229,6 +229,32 @@ def run_analysis(net, comp_edges, branch_min, anomalies):
     return trees_all
 
 
+def run_final(net, comp_edges, branch_min, ratio, crossline_arg, anomalies):
+    """给定 branch_min 走完主路径全流程, 返回 (finals, crosslen, wing, T)
+    重试安全: 空结果时回滚本次新增 anomalies, 供降级重试不重复累计"""
+    saved = len(anomalies)
+    trees = run_analysis(net, comp_edges, branch_min, anomalies)
+    mainlens = sorted(net.elen[e] for tr in trees for e in tr["main"])
+    med = mainlens[len(mainlens) // 2] if mainlens else 30.0
+    crosslen = round(crossline_arg, 2) if crossline_arg else round(1.5 * med, 2)
+    wing = round(crosslen * 2 / 3, 2)
+    T = round(max(5.0, crosslen / 4, wing / 4), 2)
+    finals = []
+    for tr in trees:
+        tr = prune_leading_stub(net, tr, T, branch_min)
+        trunk_total = sum(net.elen[e] for e in tr["main"])
+        thresh = max(branch_min, trunk_total * ratio)
+        tr = prune_branches(net, tr, thresh)
+        if not tr["main"]:
+            continue
+        if tr["sink"] not in net.csk and trunk_total < branch_min:   # A.1.5
+            continue
+        finals.append(finalize_tree(net, tr))
+    if not finals:
+        del anomalies[saved:]       # 丢弃本次 multi_sink 等记录, 避免重试重复累计
+    return finals, crosslen, wing, T
+
+
 def calibrate_pass1(net, comp_edges):
     """两遍标定第一遍: 原始断头链长分布中, 就地主峰之后首个显著空档(≥5 m)的中点为初值
     (本图 14.22↔19.31 → 16.76, 对应 md 为本图标定的 16.15)"""
@@ -241,7 +267,8 @@ def calibrate_pass1(net, comp_edges):
 
 
 def calibrate_pass2(net, comp_edges, t1, anomalies):
-    """两遍标定第二遍: 保留分支累计长度库存中就地主峰与支管峰之间空档的中点(就近 0.5 m)"""
+    """两遍标定第二遍: 保留分支累计长度库存中就地主峰与支管峰之间空档的中点(就近 0.5 m)
+    返回 (阈值, 库存, 空档边界)"""
     saved = len(anomalies)
     inv = []
     for tr in run_analysis(net, comp_edges, t1, anomalies):
@@ -252,6 +279,7 @@ def calibrate_pass2(net, comp_edges, t1, anomalies):
     del anomalies[saved:]          # 标定轮不产生正式异常记录
     inv = sorted(set(inv))
     t2 = t1
+    gap = None
     if len(inv) >= 3:
         gaps = [inv[i + 1] - inv[i] for i in range(len(inv) - 1)]
         gmed = sorted(gaps)[len(gaps) // 2]
@@ -267,7 +295,8 @@ def calibrate_pass2(net, comp_edges, t1, anomalies):
         clusters.append(cur)
         if len(clusters) >= 2:
             t2 = round((clusters[0][-1] + clusters[1][0]) / 2.0 * 2) / 2   # 空档中点, 就近 0.5 m
-    return max(t2, t1), inv
+            gap = [clusters[0][-1], clusters[1][0]]
+    return max(t2, t1), inv, gap
 
 
 def main():
@@ -286,38 +315,44 @@ def main():
     anomalies = net.data["anomalies"]
     comp_edges = {c["id"]: c["edge_ids"] for c in net.data["components"]}
 
-    # ---- 两遍标定 ----
+    # ---- 两遍标定 + 退化护栏 ----
+    calib = None
     if args.branch_min is not None:
         BRANCH_MIN = args.branch_min
         print(f"标定: 手动指定 branch_min = {BRANCH_MIN}")
+        finals, CROSSLEN, WING, T = run_final(net, comp_edges, BRANCH_MIN,
+                                              args.trunk_ratio, args.crossline, anomalies)
+        if not finals:
+            print(f"警告: 手动 branch_min={BRANCH_MIN} 致 0 棵树, 请检查阈值是否过大")
     else:
         t1 = calibrate_pass1(net, comp_edges)
-        BRANCH_MIN, inventory = calibrate_pass2(net, comp_edges, t1, anomalies)
-        if not BRANCH_MIN:
-            BRANCH_MIN = DEFAULT_BRANCH_MIN
-        print(f"标定: pass1 阈值 {t1:.2f}, 库存 {len(inventory)} 条, pass2 阈值 {BRANCH_MIN}")
+        t2, inventory, gap = calibrate_pass2(net, comp_edges, t1, anomalies)
+        calib = {"pass1": t1, "inventory_count": len(inventory),
+                 "branch_min_auto": t2,
+                 "gap_low": gap[0] if gap else None,
+                 "gap_high": gap[1] if gap else None}
+        print(f"标定: pass1 阈值 {t1:.2f}, 库存 {len(inventory)} 条, pass2 阈值 {t2}")
+        # 护栏: 空档过宽时中点阈值可超一切叉口间距, 级联全剪致 0 树 → 逐级回退
+        ladder = [t2]
+        if t1 != t2:
+            ladder.append(t1)
+        if DEFAULT_BRANCH_MIN not in ladder:
+            ladder.append(DEFAULT_BRANCH_MIN)
+        finals = []
+        for k, cand in enumerate(ladder):
+            BRANCH_MIN = cand
+            finals, CROSSLEN, WING, T = run_final(net, comp_edges, BRANCH_MIN,
+                                                  args.trunk_ratio, args.crossline, anomalies)
+            if finals:
+                if k > 0:
+                    print(f"警告: 自动标定 {ladder[0]} 致 0 棵树(疑似空档过宽退化"
+                          f"{f' {gap[0]}↔{gap[1]}m' if gap else ''}), "
+                          f"回退 branch_min = {cand} 后得到 {len(finals)} 棵树")
+                break
+        calib["fallback_used"] = BRANCH_MIN != t2
+        calib["branch_min_effective"] = BRANCH_MIN
 
-    trees = run_analysis(net, comp_edges, BRANCH_MIN, anomalies)
-
-    # ---- 横线标定: 1.5 × 主干边长中位数(池化所有树的主干边, 头部短桩剪除前) ----
-    mainlens = sorted(net.elen[e] for tr in trees for e in tr["main"])
-    med = mainlens[len(mainlens) // 2] if mainlens else 30.0
-    CROSSLEN = round(args.crossline, 2) if args.crossline else round(1.5 * med, 2)
-    WING = round(CROSSLEN * 2 / 3, 2)
-    T = round(max(5.0, CROSSLEN / 4, WING / 4), 2)
-    print(f"横线总长 {CROSSLEN} (=1.5×中位 {med:.2f}), 翼长 {WING}, 显著性阈值 T {T}")
-
-    finals = []
-    for tr in trees:
-        tr = prune_leading_stub(net, tr, T, BRANCH_MIN)
-        trunk_total = sum(net.elen[e] for e in tr["main"])
-        thresh = max(BRANCH_MIN, trunk_total * args.trunk_ratio)
-        tr = prune_branches(net, tr, thresh)
-        if not tr["main"]:
-            continue
-        if tr["sink"] not in net.csk and trunk_total < BRANCH_MIN:   # A.1.5
-            continue
-        finals.append(finalize_tree(net, tr))
+    print(f"横线总长 {CROSSLEN} (=1.5×中位), 翼长 {WING}, 显著性阈值 T {T}")
     finals.sort(key=lambda t: (t["comp"], t["sink"]))
     for k, tr in enumerate(finals):
         tr["id"] = k + 1
@@ -342,6 +377,8 @@ def main():
     data["meta"]["start_crossline_len"] = CROSSLEN
     data["meta"]["end_arrow_wing"] = WING
     data["meta"]["significance_threshold"] = T
+    if calib:
+        data["meta"]["calibration"] = calib
     save_net(data, args.outfile)
     for tr in finals:
         gt = sum(net.elen[e] for e in tr["main"])

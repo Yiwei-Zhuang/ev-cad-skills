@@ -264,6 +264,17 @@ def main():
 
     # ---- DXF 输出(以源 DXF 复制为底图) ----
     doc = ezdxf.readfile(args.src)
+    if doc.dxfversion < ezdxf.const.DXF2000:   # R12 等旧版不支持 LWPOLYLINE, 升格底图
+        from ezdxf.addons import Importer
+        base = ezdxf.new("R2000", setup=True)
+        imp = Importer(doc, base)
+        imp.import_modelspace()
+        imp.finalize()
+        issues = len(getattr(imp, "issues", []))
+        print(f"底图升格: {doc.dxfversion} → R2000 "
+              f"(Importer 告警 {issues} 条; 不支持的实体被丢弃)")
+        data["meta"]["base_dxf_upgraded_from"] = doc.dxfversion
+        doc = base
     msp = doc.modelspace()
     doc.layers.add(FLOW_LAYER, color=7, dxfattribs={"lineweight": 211})
 

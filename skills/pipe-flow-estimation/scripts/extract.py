@@ -4,7 +4,9 @@
 端点聚类为 nodes, LX 箭头定向(arrow), 无箭头按 bfs-to-csk 猜测(guessed),
 CSK 出水口绑定节点类型, 同节点对多余边记 reverse/duplicate 异常。
 用法: extract.py SRC.dxf OUT.json --layer YSLINE [--point-layer YSPOINT]
+      [--arrow-block LX] [--arrow-layer LAYER] [--outlet-block CSK]
       [--snap 0.3] [--outlet-tol 1.0] [--arrow-tol 0.01] [--unit meter]
+箭头块默认全局搜(不限层); --arrow-layer 提供时按层过滤。
 """
 import argparse
 import math
@@ -24,6 +26,10 @@ def main():
     ap.add_argument("--snap", type=float, default=0.3, help="端点聚类容差")
     ap.add_argument("--outlet-tol", type=float, default=1.0, help="CSK 出水口绑定容差")
     ap.add_argument("--arrow-tol", type=float, default=0.01, help="LX 箭头匹配容差")
+    ap.add_argument("--arrow-layer", default=None,
+                    help="LX 箭头块所在图层过滤, 默认全局搜(不限层)")
+    ap.add_argument("--arrow-block", default="LX", help="流向箭头块名")
+    ap.add_argument("--outlet-block", default="CSK", help="出水口块名")
     ap.add_argument("--unit", default="meter")
     args = ap.parse_args()
     LAYER = args.layer
@@ -97,22 +103,26 @@ def main():
     # ---- CSK 出水口绑定 (point_layer 层 CSK 块, outlet_tol) ----
     node_type = ["junction"] * len(node_xy)
     for e in msp:
-        if e.dxftype() == "INSERT" and e.dxf.name == "CSK" and e.dxf.layer == args.point_layer:
-            p = V(e.dxf.insert.x, e.dxf.insert.y)
-            best = None
-            for i, q in enumerate(node_xy):
-                d = p.distance(q)
-                if d <= args.outlet_tol and (best is None or (d, i) < best):
-                    best = (d, i)
-            if best:
-                node_type[best[1]] = "CSK"
+        if e.dxftype() != "INSERT" or e.dxf.name != args.outlet_block \
+                or e.dxf.layer != args.point_layer:
+            continue
+        p = V(e.dxf.insert.x, e.dxf.insert.y)
+        best = None
+        for i, q in enumerate(node_xy):
+            d = p.distance(q)
+            if d <= args.outlet_tol and (best is None or (d, i) < best):
+                best = (d, i)
+        if best:
+            node_type[best[1]] = "CSK"
     CSK = {i for i, t in enumerate(node_type) if t == "CSK"}
 
     # ---- LX 箭头匹配 (arrow_tol; 多候选取最平行者, 平行并列取近者, 再取边ID) ----
     e_src = ["guessed"] * E
     e_dir = [None] * E      # 流向单位向量(箭头确定)
     for e in msp:
-        if e.dxftype() != "INSERT" or e.dxf.name != "LX" or e.dxf.layer != LAYER:
+        if e.dxftype() != "INSERT" or e.dxf.name != args.arrow_block:
+            continue
+        if args.arrow_layer and e.dxf.layer != args.arrow_layer:
             continue
         p = V(e.dxf.insert.x, e.dxf.insert.y)
         th = math.radians(e.dxf.rotation)
@@ -222,6 +232,8 @@ def main():
             "snap_tolerance": args.snap,
             "outlet_bind_tolerance": args.outlet_tol,
             "arrow_match_tolerance": args.arrow_tol,
+            "arrow_block": args.arrow_block,
+            "arrow_layer": args.arrow_layer,
             "direction_rule": "arrow | guessed",
             "branch_min_length": None,       # 步骤3 标定后回填
             "branch_trunk_ratio": 0.05,      # 步骤3 可覆盖

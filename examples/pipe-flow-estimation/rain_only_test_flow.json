@@ -1,18 +1,29 @@
 {
  "meta": {
   "layer": "YSLINE",
-  "source_file": "src_dxf/rain_only_test.dxf",
+  "source_file": "/Users/yiweizhuang/cold/ev-cad-skills/examples/pipe-flow-estimation/rain_only_test.dxf",
   "coordinate_unit": "meter",
   "snap_tolerance": 0.3,
   "outlet_bind_tolerance": 1.0,
   "arrow_match_tolerance": 0.01,
+  "arrow_block": "LX",
+  "arrow_layer": null,
   "direction_rule": "arrow | guessed",
   "branch_min_length": 25.0,
   "branch_trunk_ratio": 0.05,
   "guess_rule": "bfs-to-csk",
   "start_crossline_len": 42.93,
   "end_arrow_wing": 28.62,
-  "significance_threshold": 10.73
+  "significance_threshold": 10.73,
+  "calibration": {
+   "pass1": 16.76,
+   "inventory_count": 22,
+   "branch_min_auto": 25.0,
+   "gap_low": 20.795,
+   "gap_high": 28.993,
+   "fallback_used": false,
+   "branch_min_effective": 25.0
+  }
  },
  "nodes": [
   {
